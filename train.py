@@ -14,57 +14,62 @@ import time
 
 # ============ Configuration ============
 CONFIG = {
-    "approach": "CNN Enhanced",
-    "iteration": 2,
-    "batch_size": 128,
-    "epochs": 50,
+    "approach": "CNN Enhanced v2",
+    "iteration": 3,
+    "batch_size": 64,
+    "epochs": 60,
     "learning_rate": 0.001,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
-    "changes": "Deeper network (3 conv blocks, 128 channels), data augmentation, CosineAnnealing LR",
+    "changes": "Remove label smoothing, smaller batch, residual-style connections, stronger augmentation",
 }
 
 
 # ============ Model ============
+class ResBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_ch, out_ch, 3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_ch)
+        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_ch)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_ch != out_ch:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, 1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_ch),
+            )
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += self.shortcut(x)
+        return self.relu(out)
+
+
 class EnhancedCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = nn.Sequential(
-            # Block 1
-            nn.Conv2d(1, 64, 3, padding=1),
+            nn.Conv2d(1, 64, 3, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout(0.25),
-
-            # Block 2
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout(0.25),
-
-            # Block 3
-            nn.Conv2d(128, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Conv2d(256, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
+            ResBlock(64, 64),
+            ResBlock(64, 64),
+            ResBlock(64, 128, stride=2),
+            nn.Dropout2d(0.2),
+            ResBlock(128, 128),
+            ResBlock(128, 256, stride=2),
+            nn.Dropout2d(0.2),
+            ResBlock(256, 256),
             nn.AdaptiveAvgPool2d(1),
-            nn.Dropout(0.25),
         )
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(256, 512),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 10),
+            nn.Dropout(0.3),
+            nn.Linear(256, 10),
         )
 
     def forward(self, x):
@@ -134,7 +139,7 @@ def main():
     train_loader, test_loader = get_data_loaders(CONFIG["batch_size"])
 
     model = EnhancedCNN().to(device)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=CONFIG["learning_rate"], weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
 
