@@ -14,30 +14,23 @@ import time
 
 # ============ Configuration ============
 CONFIG = {
-    "approach": "CNN Baseline",
-    "iteration": 1,
+    "approach": "CNN Enhanced",
+    "iteration": 2,
     "batch_size": 128,
-    "epochs": 30,
+    "epochs": 50,
     "learning_rate": 0.001,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
+    "changes": "Deeper network (3 conv blocks, 128 channels), data augmentation, CosineAnnealing LR",
 }
 
 
 # ============ Model ============
-class SimpleCNN(nn.Module):
+class EnhancedCNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout(0.25),
-
-            nn.Conv2d(32, 64, 3, padding=1),
+            # Block 1
+            nn.Conv2d(1, 64, 3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.Conv2d(64, 64, 3, padding=1),
@@ -45,13 +38,33 @@ class SimpleCNN(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d(2),
             nn.Dropout(0.25),
+
+            # Block 2
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout(0.25),
+
+            # Block 3
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Dropout(0.25),
         )
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 7 * 7, 256),
+            nn.Linear(256, 512),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(256, 10),
+            nn.Linear(512, 10),
         )
 
     def forward(self, x):
@@ -61,6 +74,9 @@ class SimpleCNN(nn.Module):
 # ============ Data ============
 def get_data_loaders(batch_size):
     transform_train = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(10),
+        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
         transforms.ToTensor(),
         transforms.Normalize((0.2860,), (0.3530,)),
     ])
@@ -117,10 +133,10 @@ def main():
     device = torch.device(CONFIG["device"])
     train_loader, test_loader = get_data_loaders(CONFIG["batch_size"])
 
-    model = SimpleCNN().to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+    model = EnhancedCNN().to(device)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    optimizer = optim.AdamW(model.parameters(), lr=CONFIG["learning_rate"], weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
 
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {param_count:,}")
@@ -132,7 +148,7 @@ def main():
     for epoch in range(1, CONFIG["epochs"] + 1):
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
         test_loss, test_acc = evaluate(model, test_loader, criterion, device)
-        scheduler.step(test_loss)
+        scheduler.step()
 
         lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch:3d} | Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | "
